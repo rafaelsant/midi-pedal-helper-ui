@@ -1,96 +1,59 @@
 import 'package:flutter/material.dart';
-import '../models/pedal_preset.dart';
-import '../models/song.dart';
-import '../services/bluetooth_service.dart';
-import '../services/midi_encoder.dart';
-import '../services/setlist_service.dart';
+import '../models/pedal_model.dart';
+import '../models/pedal_models.dart';
 
-class PedalProvider with ChangeNotifier {
-  final SetlistService _setlistService = SetlistService();
+class PedalProvider extends ChangeNotifier {
+  // --- MANTÉM O CONTRATO ATUAL ---
+  PedalModel? _selectedPedal;
+  PedalModel? get selectedPedal => _selectedPedal;
 
-  Song? _currentSong;
-  String _activeSceneKey = "A";
-  PedalPreset? _editingPreset; // Buffer de edição
-
-  PedalPreset? get editingPreset => _editingPreset;
-
-  String get activeSceneKey => _activeSceneKey;
-
-  Song? get currentSong => _currentSong;
-
-  void loadSong(Song song) {
-    _currentSong = song;
-    _activeSceneKey = "A";
-    _cloneSceneToEditingBuffer(_activeSceneKey);
+  void selectPedal(PedalModel pedal) {
+    _selectedPedal = pedal;
+    // Quando um pedal é selecionado, inicializamos as cenas para ele
+    _initializeScenesForPedal(pedal);
     notifyListeners();
   }
 
-  void switchScene(String key) {
-    if (_currentSong == null || _activeSceneKey == key) return;
-    _activeSceneKey = key;
-    _cloneSceneToEditingBuffer(key);
+  // --- NOVAS FUNCIONALIDADES (SEM QUEBRAR O ANTIGO) ---
+
+  List<PedalScene> _currentScenes = [];
+  int _activeSceneIndex = 0;
+
+  List<PedalScene> get currentScenes => _currentScenes;
+  int get activeSceneIndex => _activeSceneIndex;
+
+  PedalScene? get activeScene =>
+      _currentScenes.isNotEmpty ? _currentScenes[_activeSceneIndex] : null;
+
+  void _initializeScenesForPedal(PedalModel pedal) {
+    // Aqui garantimos que, ao selecionar qualquer pedal,
+    // ele já comece com as 3 cenas padrão.
+    _currentScenes = [
+      PedalScene(id: 'A', customName: 'Cena A', parameters: _loadParamsFor(pedal)),
+      PedalScene(id: 'B', customName: 'Cena B', parameters: _loadParamsFor(pedal)),
+      PedalScene(id: 'C', customName: 'Cena C', parameters: _loadParamsFor(pedal)),
+    ];
+  }
+
+  void setActiveScene(int index) {
+    _activeSceneIndex = index;
     notifyListeners();
   }
 
-  void _cloneSceneToEditingBuffer(String key) {
-    if (_currentSong == null) return;
-    final scenePreset = _currentSong!.scenes[key];
-    if (scenePreset != null) {
-      _editingPreset = PedalPreset.fromMap(scenePreset.toMap());
+  void updateParameter(int paramIndex, int newValue) {
+    if (activeScene != null && activeScene!.parameters.length > paramIndex) {
+      activeScene!.parameters[paramIndex].currentValue = newValue;
+      notifyListeners();
+      // O envio MIDI virá aqui
     }
   }
 
-  void updateEditingParameter(String param, double value) {
-    if (_editingPreset == null) return;
-    final presetMap = _editingPreset!.toMap();
-    presetMap[param] = value;
-    _editingPreset = PedalPreset.fromMap(presetMap);
-    notifyListeners();
-  }
-
-  Future<void> saveChanges() async {
-    if (_currentSong == null || _editingPreset == null) return;
-
-    // 1. Cria um novo mapa de cenas com a cena alterada (imutabilidade)
-    final newScenes = Map<String, PedalPreset>.from(_currentSong!.scenes);
-    newScenes[_activeSceneKey] = _editingPreset!;
-
-    // 2. Cria uma NOVA instância da música com as cenas atualizadas
-    final updatedSong = Song(title: _currentSong!.title, scenes: newScenes);
-
-    // 3. Lê a lista, substitui a música antiga pela nova e salva
-    final setlist = await _setlistService.readSetlist();
-    final index = setlist.indexWhere((s) => s.title == updatedSong.title);
-
-    if (index != -1) {
-      setlist[index] = updatedSong;
-      await _setlistService.saveSetlist(setlist);
-    }
-
-    // 4. ATUALIZA o estado do provider para a nova instância da música
-    _currentSong = updatedSong;
-
-    // 5. Clona a cena recém-salva para resetar o estado 'isDirty'
-    _cloneSceneToEditingBuffer(_activeSceneKey);
-
-    notifyListeners();
-  }
-
-  void sendMidiPreset() {
-    if (_editingPreset == null) return;
-
-    // Garante que o mapa seja <String, double> como o encoder espera
-    final Map<String, double> doubleParams = _editingPreset!.toMap().map(
-            (key, value) =>
-            MapEntry(key, (value is num) ? value.toDouble() : 0.0));
-
-    final bytes = MidiEncoder.encodeFullSysex(doubleParams);
-    BluetoothService().sendMidiCommand(bytes);
-  }
-
-  void discardChanges() {
-    if (_currentSong == null) return;
-    _cloneSceneToEditingBuffer(_activeSceneKey);
-    notifyListeners();
+  // Mock temporário para não quebrar a inicialização
+  List<PedalParameter> _loadParamsFor(PedalModel pedal) {
+    // No futuro, isso lerá o JSON baseado no pedal.model
+    return [
+      PedalParameter(name: 'Gain', type: 'CC', controlNumber: 10, currentValue: 50),
+      PedalParameter(name: 'Level', type: 'CC', controlNumber: 12, currentValue: 70),
+    ];
   }
 }
